@@ -1,54 +1,36 @@
-import React, {useState} from 'react';
+
+import React, {useEffect} from 'react';
 import {
-  NativeModules,
+  requireNativeComponent,
   PermissionsAndroid,
+  Platform,
   SafeAreaView,
   Text,
-  TouchableOpacity,
   StyleSheet,
 } from 'react-native';
 
-const {ArCoreModule} = NativeModules;
+const ArCoreView = requireNativeComponent('ArCoreView');
 
 export default function App() {
-  const [status, setStatus] = useState('Ready to check depth support');
-
-  const checkDepth = async () => {
-    try {
-      setStatus('Requesting camera permission...');
-
-      const permission = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.CAMERA,
-      );
-
-      if (permission !== PermissionsAndroid.RESULTS.GRANTED) {
-        setStatus('Camera permission denied');
-        return;
+  useEffect(() => {
+    const requestCameraPermission = async () => {
+      if (Platform.OS === 'android') {
+        await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.CAMERA,
+        );
       }
+    };
 
-      setStatus('Checking Depth API support...');
-
-      const supported = await ArCoreModule.checkDepthSupport();
-
-      setStatus(
-        supported
-          ? 'Depth API: SUPPORTED'
-          : 'Depth API: NOT SUPPORTED',
-      );
-    } catch (error) {
-      setStatus(`Error: ${String(error)}`);
-    }
-  };
+    requestCameraPermission();
+  }, []);
 
   return (
     <SafeAreaView style={styles.container}>
       <Text style={styles.title}>Room Scanner</Text>
 
-      <Text style={styles.status}>{status}</Text>
+      <ArCoreView style={styles.camera} />
 
-      <TouchableOpacity style={styles.button} onPress={checkDepth}>
-        <Text style={styles.buttonText}>Check Depth Support</Text>
-      </TouchableOpacity>
+      <Text style={styles.info}>ARCore view initialized</Text>
     </SafeAreaView>
   );
 }
@@ -56,28 +38,21 @@ export default function App() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#000',
     alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
   },
   title: {
-    fontSize: 26,
+    color: '#fff',
+    fontSize: 24,
     fontWeight: 'bold',
-    marginBottom: 20,
+    marginVertical: 20,
   },
-  status: {
-    fontSize: 16,
-    marginBottom: 24,
-    textAlign: 'center',
+  camera: {
+    width: '100%',
+    flex: 1,
   },
-  button: {
-    backgroundColor: '#2563eb',
+  info: {
+    color: '#fff',
     padding: 16,
-    borderRadius: 10,
-  },
-  buttonText: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: 'bold',
   },
 });

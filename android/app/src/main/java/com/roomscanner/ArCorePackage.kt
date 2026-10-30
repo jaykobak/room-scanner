@@ -1,3 +1,4 @@
+
 package com.roomscanner
 
 import com.facebook.react.ReactPackage
@@ -16,6 +17,6 @@ class ArCorePackage : ReactPackage {
     override fun createViewManagers(
         reactContext: ReactApplicationContext
     ): List<ViewManager<*, *>> {
-        return emptyList()
+        return listOf(ArCoreViewManager())
     }
 }
