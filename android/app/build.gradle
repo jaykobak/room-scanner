@@ -108,6 +108,8 @@ android {
 }
 
 dependencies {
+    implementation "com.google.ar:core:1.52.0"
+    
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
 
