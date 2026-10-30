@@ -1,5 +1,4 @@
-
-import React, {useEffect} from 'react';
+import React, {useEffect, useState} from 'react';
 import {
   requireNativeComponent,
   PermissionsAndroid,
@@ -12,25 +11,33 @@ import {
 const ArCoreView = requireNativeComponent('ArCoreView');
 
 export default function App() {
+  const [permissionGranted, setPermissionGranted] = useState(false);
+
   useEffect(() => {
-    const requestCameraPermission = async () => {
+    const requestPermission = async () => {
       if (Platform.OS === 'android') {
-        await PermissionsAndroid.request(
+        const result = await PermissionsAndroid.request(
           PermissionsAndroid.PERMISSIONS.CAMERA,
+        );
+
+        setPermissionGranted(
+          result === PermissionsAndroid.RESULTS.GRANTED,
         );
       }
     };
 
-    requestCameraPermission();
+    requestPermission();
   }, []);
 
   return (
     <SafeAreaView style={styles.container}>
       <Text style={styles.title}>Room Scanner</Text>
 
-      <ArCoreView style={styles.camera} />
-
-      <Text style={styles.info}>ARCore view initialized</Text>
+      {permissionGranted ? (
+        <ArCoreView style={styles.camera} />
+      ) : (
+        <Text style={styles.info}>Waiting for camera permission...</Text>
+      )}
     </SafeAreaView>
   );
 }
@@ -48,8 +55,8 @@ const styles = StyleSheet.create({
     marginVertical: 20,
   },
   camera: {
-    width: '100%',
     flex: 1,
+    width: '100%',
   },
   info: {
     color: '#fff',
