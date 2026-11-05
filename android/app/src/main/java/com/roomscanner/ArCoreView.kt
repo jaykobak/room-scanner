@@ -5,6 +5,7 @@ import android.content.Context
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
+import android.opengl.Matrix
 import android.view.Surface
 import android.view.WindowManager
 import com.facebook.react.bridge.Arguments
@@ -48,6 +49,16 @@ class ArCoreView(context: Context) :
     private var lastReportedDepth = ""
     private val accumulatedWorldPoints = LinkedHashMap<String, FloatArray>()
     private var totalDepthSamples = 0L
+    private var pointShaderProgram = 0
+
+    private val pointBuffer = ByteBuffer
+        .allocateDirect(1500 * 3 * 4)
+        .order(ByteOrder.nativeOrder())
+        .asFloatBuffer()
+
+    private val viewMatrix = FloatArray(16)
+    private val projectionMatrix = FloatArray(16)
+    private val mvpMatrix = FloatArray(16)
 
     private val positions = floatArrayOf(
         -1f, -1f,
@@ -110,6 +121,7 @@ class ArCoreView(context: Context) :
         )
 
         shaderProgram = createProgram()
+        pointShaderProgram = createPointProgram()
 
         try {
             if (session == null) {
@@ -158,7 +170,10 @@ class ArCoreView(context: Context) :
     }
 
     override fun onDrawFrame(gl: GL10?) {
-        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+        GLES20.glClear(
+            GLES20.GL_COLOR_BUFFER_BIT or
+                GLES20.GL_DEPTH_BUFFER_BIT
+        )
 
         if (!sessionReady) return
 
@@ -169,6 +184,7 @@ class ArCoreView(context: Context) :
 
             if (frame.camera.trackingState == TrackingState.TRACKING) {
                 acquireDepth(frame)
+                drawPointCloud(frame)
             } else {
                 reportDepthStatus("Camera tracking...")
             }
@@ -243,6 +259,83 @@ class ArCoreView(context: Context) :
 
         GLES20.glDisableVertexAttribArray(positionHandle)
         GLES20.glDisableVertexAttribArray(textureHandle)
+    }
+
+    private fun drawPointCloud(frame: Frame) {
+        if (pointShaderProgram == 0 || accumulatedWorldPoints.isEmpty()) {
+            return
+        }
+
+        val pointCount = accumulatedWorldPoints.size.coerceAtMost(1500)
+
+        pointBuffer.clear()
+
+        accumulatedWorldPoints.values.take(pointCount).forEach { point ->
+            pointBuffer.put(point[0])
+            pointBuffer.put(point[1])
+            pointBuffer.put(point[2])
+        }
+
+        pointBuffer.position(0)
+
+        frame.camera.getViewMatrix(viewMatrix, 0)
+
+        frame.camera.getProjectionMatrix(
+            projectionMatrix,
+            0,
+            0.1f,
+            20f
+        )
+
+        Matrix.multiplyMM(
+            mvpMatrix,
+            0,
+            projectionMatrix,
+            0,
+            viewMatrix,
+            0
+        )
+
+        GLES20.glEnable(GLES20.GL_DEPTH_TEST)
+        GLES20.glUseProgram(pointShaderProgram)
+
+        val positionHandle = GLES20.glGetAttribLocation(
+            pointShaderProgram,
+            "aPosition"
+        )
+
+        val matrixHandle = GLES20.glGetUniformLocation(
+            pointShaderProgram,
+            "uMvpMatrix"
+        )
+
+        GLES20.glUniformMatrix4fv(
+            matrixHandle,
+            1,
+            false,
+            mvpMatrix,
+            0
+        )
+
+        GLES20.glEnableVertexAttribArray(positionHandle)
+
+        GLES20.glVertexAttribPointer(
+            positionHandle,
+            3,
+            GLES20.GL_FLOAT,
+            false,
+            0,
+            pointBuffer
+        )
+
+        GLES20.glDrawArrays(
+            GLES20.GL_POINTS,
+            0,
+            pointCount
+        )
+
+        GLES20.glDisableVertexAttribArray(positionHandle)
+        GLES20.glDisable(GLES20.GL_DEPTH_TEST)
     }
 
     private fun acquireDepth(frame: Frame) {
@@ -435,6 +528,58 @@ class ArCoreView(context: Context) :
         }
 
         return shader
+    }
+
+    private fun createPointProgram(): Int {
+        val vertexShader = createShader(
+            GLES20.GL_VERTEX_SHADER,
+            """
+            attribute vec3 aPosition;
+            uniform mat4 uMvpMatrix;
+
+            void main() {
+                gl_Position = uMvpMatrix * vec4(aPosition, 1.0);
+                gl_PointSize = 8.0;
+            }
+            """
+        )
+
+        val fragmentShader = createShader(
+            GLES20.GL_FRAGMENT_SHADER,
+            """
+            precision mediump float;
+
+            void main() {
+                gl_FragColor = vec4(0.1, 1.0, 0.3, 1.0);
+            }
+            """
+        )
+
+        val program = GLES20.glCreateProgram()
+
+        GLES20.glAttachShader(program, vertexShader)
+        GLES20.glAttachShader(program, fragmentShader)
+        GLES20.glLinkProgram(program)
+
+        val status = IntArray(1)
+
+        GLES20.glGetProgramiv(
+            program,
+            GLES20.GL_LINK_STATUS,
+            status,
+            0
+        )
+
+        if (status[0] == 0) {
+            val error = GLES20.glGetProgramInfoLog(program)
+            GLES20.glDeleteProgram(program)
+            throw RuntimeException(error)
+        }
+
+        GLES20.glDeleteShader(vertexShader)
+        GLES20.glDeleteShader(fragmentShader)
+
+        return program
     }
 
     private fun createProgram(): Int {
