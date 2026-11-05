@@ -19,6 +19,7 @@ import com.google.ar.core.exceptions.NotYetAvailableException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
+import kotlin.math.roundToInt
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
@@ -45,6 +46,8 @@ class ArCoreView(context: Context) :
     private var shaderProgram = 0
 
     private var lastReportedDepth = ""
+    private val accumulatedWorldPoints = LinkedHashMap<String, FloatArray>()
+    private var totalDepthSamples = 0L
 
     private val positions = floatArrayOf(
         -1f, -1f,
@@ -255,13 +258,11 @@ class ArCoreView(context: Context) :
                 val width = depthImage.width
                 val height = depthImage.height
 
-                // Get the camera's actual calibration information.
                 val intrinsics = frame.camera.imageIntrinsics
                 val focalLength = intrinsics.focalLength
                 val principalPoint = intrinsics.principalPoint
                 val imageDimensions = intrinsics.imageDimensions
 
-                // Scale camera intrinsics to match the depth image.
                 val scaleX = width.toFloat() / imageDimensions[0]
                 val scaleY = height.toFloat() / imageDimensions[1]
 
@@ -271,6 +272,7 @@ class ArCoreView(context: Context) :
                 val cy = principalPoint[1] * scaleY
 
                 val grid = mutableListOf<String>()
+                val cameraPose = frame.camera.pose
 
                 var centerDepthMm = 0
 
@@ -278,15 +280,15 @@ class ArCoreView(context: Context) :
                     val rowValues = mutableListOf<String>()
 
                     for (col in 0 until 3) {
-                        val centerX = ((col + 0.5) * width / 3).toInt()
-                        val centerY = ((row + 0.5) * height / 3).toInt()
+                        val pixelX = ((col + 0.5f) * width / 3).toInt()
+                        val pixelY = ((row + 0.5f) * height / 3).toInt()
 
                         val measurements = mutableListOf<Int>()
 
                         for (dy in -1..1) {
                             for (dx in -1..1) {
-                                val x = centerX + dx
-                                val y = centerY + dy
+                                val x = pixelX + dx
+                                val y = pixelY + dy
 
                                 if (x in 0 until width && y in 0 until height) {
                                     val offset =
@@ -301,6 +303,7 @@ class ArCoreView(context: Context) :
 
                                         if (depthMm > 0) {
                                             measurements.add(depthMm)
+                                            totalDepthSamples++
                                         }
                                     }
                                 }
@@ -321,6 +324,37 @@ class ArCoreView(context: Context) :
                             if (row == 1 && col == 1) {
                                 centerDepthMm = medianMm
                             }
+
+                            // Convert this depth sample into camera coordinates.
+                            val z = medianMm / 1000f
+                            val x = (pixelX - cx) * z / fx
+                            val y = (cy - pixelY) * z / fy
+
+                            // ARCore cameras look along their local negative Z axis.
+                            val cameraPoint = floatArrayOf(x, y, -z)
+
+                            // Transform the point into ARCore world coordinates.
+                            val worldPoint =
+                                cameraPose.transformPoint(cameraPoint)
+
+                            // Group nearby points into 5 cm spatial cells.
+                            val key = listOf(
+                                (worldPoint[0] / 0.05f).roundToInt(),
+                                (worldPoint[1] / 0.05f).roundToInt(),
+                                (worldPoint[2] / 0.05f).roundToInt()
+                            ).joinToString(",")
+
+                            if (!accumulatedWorldPoints.containsKey(key)) {
+                                accumulatedWorldPoints[key] = worldPoint
+                            }
+
+                            // Keep memory usage bounded.
+                            if (accumulatedWorldPoints.size > 1500) {
+                                val oldestKey =
+                                    accumulatedWorldPoints.keys.first()
+
+                                accumulatedWorldPoints.remove(oldestKey)
+                            }
                         }
                     }
 
@@ -329,36 +363,27 @@ class ArCoreView(context: Context) :
 
                 val coordinateText = if (centerDepthMm > 0) {
                     val z = centerDepthMm / 1000f
+                    val x = (width / 2f - cx) * z / fx
+                    val y = (cy - height / 2f) * z / fy
 
-                    val centerX = width / 2f
-                    val centerY = height / 2f
+                    val worldPoint = cameraPose.transformPoint(
+                        floatArrayOf(x, y, -z)
+                    )
 
-                    // Convert the depth pixel into camera-space coordinates.
-                    // ARCore camera coordinates use positive Y upwards.
-                    val x = (centerX - cx) * z / fx
-                    val y = (cy - centerY) * z / fy
-
-                    // Transform the point from camera space into world space.
-                    val cameraPoint = floatArrayOf(x, y, z)
-
-                    val worldPoint = frame.camera.pose.transformPoint(cameraPoint)
-
-                    "3D point (camera space):\n" +
-                        "X: ${"%.2f".format(java.util.Locale.US, x)} m\n" +
-                        "Y: ${"%.2f".format(java.util.Locale.US, y)} m\n" +
-                        "Z: ${"%.2f".format(java.util.Locale.US, z)} m\n\n" +
-                        "3D point (world space):\n" +
+                    "Centre point (world space):\n" +
                         "X: ${"%.2f".format(java.util.Locale.US, worldPoint[0])} m\n" +
                         "Y: ${"%.2f".format(java.util.Locale.US, worldPoint[1])} m\n" +
                         "Z: ${"%.2f".format(java.util.Locale.US, worldPoint[2])} m"
                 } else {
-                    "3D point: No valid centre depth"
+                    "Centre point: No valid depth"
                 }
 
                 reportDepthStatus(
                     "Depth map (cm)\n" +
                         grid.joinToString("\n") +
-                        "\n\n$coordinateText"
+                        "\n\n$coordinateText" +
+                        "\n\nStored 3D points: ${accumulatedWorldPoints.size}" +
+                        "\nDepth samples processed: $totalDepthSamples"
                 )
 
             } finally {
