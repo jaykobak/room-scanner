@@ -255,9 +255,25 @@ class ArCoreView(context: Context) :
                 val width = depthImage.width
                 val height = depthImage.height
 
+                // Get the camera's actual calibration information.
+                val intrinsics = frame.camera.imageIntrinsics
+                val focalLength = intrinsics.focalLength
+                val principalPoint = intrinsics.principalPoint
+                val imageDimensions = intrinsics.imageDimensions
+
+                // Scale camera intrinsics to match the depth image.
+                val scaleX = width.toFloat() / imageDimensions[0]
+                val scaleY = height.toFloat() / imageDimensions[1]
+
+                val fx = focalLength[0] * scaleX
+                val fy = focalLength[1] * scaleY
+                val cx = principalPoint[0] * scaleX
+                val cy = principalPoint[1] * scaleY
+
                 val grid = mutableListOf<String>()
 
-                // Divide the depth image into 3 rows and 3 columns.
+                var centerDepthMm = 0
+
                 for (row in 0 until 3) {
                     val rowValues = mutableListOf<String>()
 
@@ -267,7 +283,6 @@ class ArCoreView(context: Context) :
 
                         val measurements = mutableListOf<Int>()
 
-                        // Sample a 3 x 3 pixel area in each region.
                         for (dy in -1..1) {
                             for (dx in -1..1) {
                                 val x = centerX + dx
@@ -301,16 +316,49 @@ class ArCoreView(context: Context) :
                                 measurements[measurements.size / 2]
 
                             rowValues.add("${medianMm / 10}")
+
+                            // Save the centre region's measurement.
+                            if (row == 1 && col == 1) {
+                                centerDepthMm = medianMm
+                            }
                         }
                     }
 
                     grid.add(rowValues.joinToString("  "))
                 }
 
+                val coordinateText = if (centerDepthMm > 0) {
+                    val z = centerDepthMm / 1000f
+
+                    val centerX = width / 2f
+                    val centerY = height / 2f
+
+                    // Convert the depth pixel into camera-space coordinates.
+                    // ARCore camera coordinates use positive Y upwards.
+                    val x = (centerX - cx) * z / fx
+                    val y = (cy - centerY) * z / fy
+
+                    // Transform the point from camera space into world space.
+                    val cameraPoint = floatArrayOf(x, y, z)
+
+                    val worldPoint = frame.camera.pose.transformPoint(cameraPoint)
+
+                    "3D point (camera space):\n" +
+                        "X: ${"%.2f".format(java.util.Locale.US, x)} m\n" +
+                        "Y: ${"%.2f".format(java.util.Locale.US, y)} m\n" +
+                        "Z: ${"%.2f".format(java.util.Locale.US, z)} m\n\n" +
+                        "3D point (world space):\n" +
+                        "X: ${"%.2f".format(java.util.Locale.US, worldPoint[0])} m\n" +
+                        "Y: ${"%.2f".format(java.util.Locale.US, worldPoint[1])} m\n" +
+                        "Z: ${"%.2f".format(java.util.Locale.US, worldPoint[2])} m"
+                } else {
+                    "3D point: No valid centre depth"
+                }
+
                 reportDepthStatus(
                     "Depth map (cm)\n" +
                         grid.joinToString("\n") +
-                        "\nImage: ${width} x ${height}"
+                        "\n\n$coordinateText"
                 )
 
             } finally {
