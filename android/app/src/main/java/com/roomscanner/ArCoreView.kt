@@ -250,53 +250,73 @@ class ArCoreView(context: Context) :
                 val plane = depthImage.planes[0]
                 val buffer = plane.buffer
                     .duplicate()
-                    .order(ByteOrder.nativeOrder())
+                    .order(ByteOrder.LITTLE_ENDIAN)
 
                 val width = depthImage.width
                 val height = depthImage.height
-                val centerX = width / 2
-                val centerY = height / 2
 
-                val measurements = mutableListOf<Int>()
+                val grid = mutableListOf<String>()
 
-                // Sample a small 5 x 5 area around the image centre.
-                for (y in (centerY - 2).coerceAtLeast(0)..
-                         (centerY + 2).coerceAtMost(height - 1)) {
-                    for (x in (centerX - 2).coerceAtLeast(0)..
-                             (centerX + 2).coerceAtMost(width - 1)) {
+                // Divide the depth image into 3 rows and 3 columns.
+                for (row in 0 until 3) {
+                    val rowValues = mutableListOf<String>()
 
-                        val offset =
-                            y * plane.rowStride + x * plane.pixelStride
+                    for (col in 0 until 3) {
+                        val centerX = ((col + 0.5) * width / 3).toInt()
+                        val centerY = ((row + 0.5) * height / 3).toInt()
 
-                        if (offset + 1 < buffer.limit()) {
-                            val packedDepth = buffer.getShort(offset).toInt()
-                            val depthMm = packedDepth and 0x1FFF
+                        val measurements = mutableListOf<Int>()
 
-                            if (depthMm > 0) {
-                                measurements.add(depthMm)
+                        // Sample a 3 x 3 pixel area in each region.
+                        for (dy in -1..1) {
+                            for (dx in -1..1) {
+                                val x = centerX + dx
+                                val y = centerY + dy
+
+                                if (x in 0 until width && y in 0 until height) {
+                                    val offset =
+                                        y * plane.rowStride +
+                                        x * plane.pixelStride
+
+                                    if (offset + 1 < buffer.limit()) {
+                                        val packedDepth =
+                                            buffer.getShort(offset).toInt()
+
+                                        val depthMm = packedDepth and 0x1FFF
+
+                                        if (depthMm > 0) {
+                                            measurements.add(depthMm)
+                                        }
+                                    }
+                                }
                             }
                         }
+
+                        if (measurements.isEmpty()) {
+                            rowValues.add("--")
+                        } else {
+                            measurements.sort()
+
+                            val medianMm =
+                                measurements[measurements.size / 2]
+
+                            rowValues.add("${medianMm / 10}")
+                        }
                     }
+
+                    grid.add(rowValues.joinToString("  "))
                 }
 
-                if (measurements.isEmpty()) {
-                    reportDepthStatus(
-                        "Depth frame available; no valid centre measurement"
-                    )
-                } else {
-                    measurements.sort()
+                reportDepthStatus(
+                    "Depth map (cm)\n" +
+                        grid.joinToString("\n") +
+                        "\nImage: ${width} x ${height}"
+                )
 
-                    val medianMm = measurements[measurements.size / 2]
-                    val distanceCm = medianMm / 10
-
-                    reportDepthStatus(
-                        "Centre distance: $distanceCm cm " +
-                            "(${width} x ${height} depth image)"
-                    )
-                }
             } finally {
                 depthImage.close()
             }
+
         } catch (e: NotYetAvailableException) {
             reportDepthStatus("Waiting for depth data")
         } catch (e: Exception) {
